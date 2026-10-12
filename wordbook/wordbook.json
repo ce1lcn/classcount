@@ -1,0 +1,46 @@
+{
+  "lists": [
+    {
+      "name": "示例词表 A · 学术写作",
+      "source": "自编示例数据",
+      "words": [
+        { "en": "hypothesis", "ph": "[haɪˈpɒθəsɪs]", "cn": "n. 假设，假说" },
+        { "en": "methodology", "ph": "[ˌmeθəˈdɒlədʒi]", "cn": "n. 方法论，研究方法" },
+        { "en": "empirical", "ph": "[ɪmˈpɪrɪkl]", "cn": "adj. 经验的，实证的" },
+        { "en": "correlation", "ph": "[ˌkɒrəˈleɪʃn]", "cn": "n. 相关性，关联" },
+        { "en": "quantitative", "ph": "[ˈkwɒntɪtətɪv]", "cn": "adj. 定量的" },
+        { "en": "ambiguous", "ph": "[æmˈbɪgjuəs]", "cn": "adj. 含糊的，有歧义的" },
+        { "en": "criterion", "ph": "[kraɪˈtɪəriən]", "cn": "n. 标准，准则" },
+        { "en": "synthesis", "ph": "[ˈsɪnθəsɪs]", "cn": "n. 综合；合成" }
+      ]
+    },
+    {
+      "name": "示例词表 B · 计算机",
+      "source": "自编示例数据",
+      "words": [
+        { "en": "compile", "ph": "[kəmˈpaɪl]", "cn": "v. 编译；汇编" },
+        { "en": "latency", "ph": "[ˈleɪtənsi]", "cn": "n. 延迟，时延" },
+        { "en": "concurrency", "ph": "[kənˈkʌrənsi]", "cn": "n. 并发，并发性" },
+        { "en": "allocate", "ph": "[ˈæləkeɪt]", "cn": "v. 分配，分派" },
+        { "en": "recursion", "ph": "[rɪˈkɜːʃn]", "cn": "n. 递归" },
+        { "en": "immutable", "ph": "[ɪˈmjuːtəbl]", "cn": "adj. 不可变的" },
+        { "en": "throughput", "ph": "[ˈθruːpʊt]", "cn": "n. 吞吐量" },
+        { "en": "deprecate", "ph": "[ˈdeprəkeɪt]", "cn": "v. 弃用；不推荐使用" }
+      ]
+    },
+    {
+      "name": "示例词表 C · 日常",
+      "source": "自编示例数据",
+      "words": [
+        { "en": "commute", "ph": "[kəˈmjuːt]", "cn": "v. 通勤，往返" },
+        { "en": "grocery", "ph": "[ˈgrəʊsəri]", "cn": "n. 食品杂货" },
+        { "en": "laundry", "ph": "[ˈlɔːndri]", "cn": "n. 待洗衣物；洗衣店" },
+        { "en": "appointment", "ph": "[əˈpɔɪntmənt]", "cn": "n. 预约，约定" },
+        { "en": "receipt", "ph": "[rɪˈsiːt]", "cn": "n. 收据，发票" },
+        { "en": "warranty", "ph": "[ˈwɒrənti]", "cn": "n. 保修，质保" },
+        { "en": "itinerary", "ph": "[aɪˈtɪnərəri]", "cn": "n. 行程，旅行路线" },
+        { "en": "substitute", "ph": "[ˈsʌbstɪtjuːt]", "cn": "n. 替代品  v. 代替" }
+      ]
+    }
+  ]
+}

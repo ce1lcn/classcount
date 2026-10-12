@@ -1,0 +1,9 @@
+{
+  "src": [
+    "pages/Index",
+    "pages/CourseImport",
+    "pages/CourseTable",
+    "pages/Planner",
+    "pages/Wordbook"
+  ]
+}

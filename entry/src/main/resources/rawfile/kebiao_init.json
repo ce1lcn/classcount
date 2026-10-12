@@ -1,0 +1,22 @@
+{
+  "_comment": "示例课表（虚构数据），用于演示内置课表导入与离线调试，不含任何真实个人信息",
+  "xnm": "2026",
+  "xqm": "3",
+  "termStart": 1788105600000,
+  "currentWeek": 0,
+  "fetchedAt": 0,
+  "items": [
+    { "name": "数据结构与算法", "teacher": "王建国", "room": "教1－101", "dayOfWeek": 1, "startSection": 1, "endSection": 2, "weeksText": "1-16周" },
+    { "name": "大学英语（读写）", "teacher": "李思远", "room": "教2－205", "dayOfWeek": 1, "startSection": 3, "endSection": 4, "weeksText": "1-16周(单)" },
+    { "name": "线性代数", "teacher": "陈慧敏", "room": "教1－305", "dayOfWeek": 1, "startSection": 6, "endSection": 7, "weeksText": "1-16周" },
+    { "name": "操作系统", "teacher": "刘振华", "room": "教3－210", "dayOfWeek": 2, "startSection": 1, "endSection": 2, "weeksText": "2-16周(双)" },
+    { "name": "计算机网络", "teacher": "赵启明,孙雅", "room": "教3－212", "dayOfWeek": 2, "startSection": 6, "endSection": 7, "weeksText": "1-16周" },
+    { "name": "大学物理", "teacher": "周立文", "room": "教1－108", "dayOfWeek": 3, "startSection": 3, "endSection": 4, "weeksText": "1-16周" },
+    { "name": "数据库原理", "teacher": "吴晓峰", "room": "教3－305", "dayOfWeek": 3, "startSection": 8, "endSection": 9, "weeksText": "1-16周" },
+    { "name": "人工智能导论", "teacher": "郑文彬", "room": "教4－401", "dayOfWeek": 3, "startSection": 10, "endSection": 12, "weeksText": "2-16周" },
+    { "name": "概率论与数理统计", "teacher": "马丽娟", "room": "教1－202", "dayOfWeek": 4, "startSection": 1, "endSection": 2, "weeksText": "1-16周" },
+    { "name": "软件工程", "teacher": "何俊杰", "room": "教3－108", "dayOfWeek": 4, "startSection": 6, "endSection": 7, "weeksText": "1-12周" },
+    { "name": "体育（篮球）", "teacher": "许强", "room": "体育馆", "dayOfWeek": 5, "startSection": 3, "endSection": 4, "weeksText": "1-16周" },
+    { "name": "思想道德与法治", "teacher": "冯晓东", "room": "教2－520", "dayOfWeek": 5, "startSection": 6, "endSection": 7, "weeksText": "1-8周" }
+  ]
+}

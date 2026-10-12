@@ -1,0 +1,12 @@
+{
+  "string": [
+    { "name": "module_desc", "value": "课表与日程倒计时" },
+    { "name": "EntryAbility_desc", "value": "ClassCount 主应用" },
+    { "name": "EntryAbility_label", "value": "ClassCount" },
+    { "name": "EntryFormAbility_desc", "value": "下一节课卡片" },
+    { "name": "EntryFormAbility_label", "value": "下一节课" },
+    { "name": "widget_desc", "value": "显示下一节课倒计时与日程进度" },
+    { "name": "widget_display_name", "value": "日程倒计时" },
+    { "name": "reason_internet", "value": "访问教务系统获取课表" }
+  ]
+}

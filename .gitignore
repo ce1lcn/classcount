@@ -1,0 +1,48 @@
+# --- HarmonyOS / DevEco ---
+/node_modules
+/oh_modules
+/local.properties
+/.idea
+**/build
+/.hvigor
+/.cxx
+.cxx
+/.clangd
+/.clang-format
+/.clang-tidy
+**/.test
+/.appanalyzer
+
+# 离线测试的临时转译目录
+test/.tmp/
+
+# --- 凭据与签名材料（绝不提交）---
+.env
+.env.*
+*.p12
+*.p7b
+*.cer
+*.pem
+*.keystore
+*.jks
+local.properties
+
+# --- 构建与发布产物 ---
+*.hap
+*.hsp
+*.app
+*.zip
+
+# --- 运行期导出的课表原始数据（可能含个人信息）---
+kb_raw.json
+*.kbdump.json
+
+# --- 编辑器 / 系统 ---
+.vscode/
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# --- 本地草稿 ---
+*.local
+*.log

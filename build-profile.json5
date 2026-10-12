@@ -1,0 +1,49 @@
+{
+  /*
+   * 本仓库不包含任何签名材料。
+   * 首次用 DevEco Studio 打开本工程时，请按「File → Project Structure → Signing Configs」
+   * 勾选 Automatically generate signature（需登录华为账号），或填入自己的证书与 Profile。
+   * 签名配置属于本机环境信息，不要提交到版本库。
+   */
+  "app": {
+    "signingConfigs": [],
+    "products": [
+      {
+        "name": "default",
+        /* 最低兼容版本；按自己设备实际的 API 版本调整。
+           编译器使用 IDE 自带 SDK，compatible 约束会拦截高于该版本的接口。 */
+        "compatibleSdkVersion": "6.1.0(23)",
+        "targetSdkVersion": "6.1.0(23)",
+        "runtimeOS": "HarmonyOS",
+        "buildOption": {
+          "strictMode": {
+            "caseSensitiveCheck": true,
+            "useNormalizedOHMUrl": true
+          }
+        }
+      }
+    ],
+    "buildModeSet": [
+      {
+        "name": "debug"
+      },
+      {
+        "name": "release"
+      }
+    ]
+  },
+  "modules": [
+    {
+      "name": "entry",
+      "srcPath": "./entry",
+      "targets": [
+        {
+          "name": "default",
+          "applyToProducts": [
+            "default"
+          ]
+        }
+      ]
+    }
+  ]
+}

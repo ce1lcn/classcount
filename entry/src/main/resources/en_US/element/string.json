@@ -1,0 +1,11 @@
+{
+  "string": [
+    { "name": "module_desc", "value": "Timetable and schedule countdown" },
+    { "name": "EntryAbility_desc", "value": "ClassCount main app" },
+    { "name": "EntryAbility_label", "value": "ClassCount" },
+    { "name": "EntryFormAbility_desc", "value": "Next class widget" },
+    { "name": "EntryFormAbility_label", "value": "Next Class" },
+    { "name": "widget_desc", "value": "Next class countdown and schedule progress" },
+    { "name": "widget_display_name", "value": "Schedule Countdown" }
+  ]
+}
