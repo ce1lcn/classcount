@@ -97,6 +97,7 @@ node test/wordbook.mjs       # 词表解析与轮次统计                24 项
 - `entry/src/main/resources/rawfile/kebiao_init.json` 是**虚构的示例课表**，仅用于演示内置导入与离线调试
 - `wordbook/wordbook.json` 是**自编的示例词表**（24 个常见词，释义自行编写），仅用于演示导入与离线测试
 - 截图用于展示界面，其中的课程、日程与词表条目均为示例内容，与仓库内置的示例数据不完全一致
+- 应用图标（`AppScope/resources/base/media/app_icon.png`、`entry/src/main/resources/base/media/` 下的前景与启动图）为 AI 辅助生成并经后期处理，未使用任何第三方角色或品牌素材
 - 架构说明见 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
 
 ## License
