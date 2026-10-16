@@ -14,6 +14,9 @@ import {
   C_BG, C_SURFACE, C_INK, C_SUB, C_MUTE, C_LINE, C_PRIMARY, C_PRIMARY_SOFT,
   C_ACCENT, C_DANGER, C_SCRIM, C_WARN_BG, C_WARN_INK
 } from '../common/Theme';
+import {
+  PAGE_MS, softAnim, popAnim, riseIn, scrimFade, dialogPop
+} from '../common/Motion';
 
 @Entry
 @Component
@@ -46,6 +49,8 @@ struct Planner {
   @State diaryBody: string = '';
   @State diarySaved: string = '';
   @State tab: string = '待办';
+  /** 正在播放「完成」动画的待办 id；空串表示没有 */
+  @State completingId: string = '';
   /** 打开编辑器时的草稿快照，用来判断用户是否真的改过东西（没改就直接关闭，不弹「放弃编辑」） */
   private editorBaseline: string = '';
   private plannerStore: PlannerStore | null = null;
@@ -55,6 +60,18 @@ struct Planner {
 
   private refreshWindowColor(): void {
     syncWindowColor(this.getUIContext(), this.editor.length > 0 || this.showHistory);
+  }
+
+  /** 页面切换：新页滑入淡入、旧页轻微左移淡出；返回时反向 */
+  pageTransition(): void {
+    PageTransitionEnter({ type: RouteType.Push, duration: PAGE_MS, curve: Curve.FastOutSlowIn })
+      .translate({ x: 72 }).opacity(0)
+    PageTransitionEnter({ type: RouteType.Pop, duration: PAGE_MS, curve: Curve.FastOutSlowIn })
+      .translate({ x: -48 }).opacity(0)
+    PageTransitionExit({ type: RouteType.Push, duration: PAGE_MS, curve: Curve.FastOutSlowIn })
+      .translate({ x: -48 }).opacity(0)
+    PageTransitionExit({ type: RouteType.Pop, duration: PAGE_MS, curve: Curve.FastOutSlowIn })
+      .translate({ x: 72 }).opacity(0)
   }
 
   aboutToAppear(): void {
@@ -157,7 +174,8 @@ struct Planner {
     this.error = '';
     try {
       await this.plannerStore.save(next);
-      this.data = next;
+      // 落盘成功后再改界面数据；放在动画闭包里，增删待办时下面的行会平滑补位而不是跳一下
+      this.getUIContext().animateTo(softAnim(280), () => { this.data = next; });
       this.notice = message;
       return true;
     } catch (err) {
@@ -274,13 +292,23 @@ struct Planner {
     }
   }
 
+  /** 点击后立即进入保存流程，避免动画延迟期间其他保存抢占；失败时恢复原样。 */
   private async finish(todo: Todo): Promise<void> {
+    if (this.completingId.length > 0 || this.busy) {
+      return;
+    }
     const next: PlannerData = clonePlanner(this.data);
     const today: number = dayOf(new Date());
-    if (completeTodo(next, todo.id, today)) {
+    if (!completeTodo(next, todo.id, today)) {
+      return;
+    }
+    this.completingId = todo.id;
+    try {
       if (await this.persist(next, '已完成，记录已保存在历史中')) {
         this.today = today;
       }
+    } finally {
+      this.completingId = '';
     }
   }
 
@@ -493,6 +521,7 @@ struct Planner {
         .onClick(() => { this.writeSchedules(this.schedules.slice(), item.id); })
       Divider().color(C_LINE).margin({ top: 10 })
     }.width('100%').padding({ top: 8, bottom: 8 }).alignItems(HorizontalAlign.Start)
+      .transition(riseIn(10))
   }
 
   @Builder
@@ -516,8 +545,10 @@ struct Planner {
   todoRow(todo: Todo, future: boolean) {
     Column() {
       Row({ space: 8 }) {
-        Button('○').width(36).height(40).fontSize(25).padding(0)
+        Button(this.completingId === todo.id ? '●' : '○').width(36).height(40).fontSize(25).padding(0)
           .backgroundColor(C_SURFACE).fontColor(C_PRIMARY).accessibilityText('完成待办：' + todo.title)
+          .scale({ x: this.completingId === todo.id ? 1.3 : 1, y: this.completingId === todo.id ? 1.3 : 1 })
+          .animation(popAnim())
           .enabled(!future && !this.busy).onClick(() => { this.finish(todo); })
         Column({ space: 3 }) {
           Row({ space: 8 }) {
@@ -537,6 +568,11 @@ struct Planner {
       }.width('100%').constraintSize({ minHeight: 58 }).padding({ top: 4, bottom: 4 })
       Divider().color(C_LINE)
     }.width('100%')
+      // 保存期间反馈完成状态；保存成功后移除，失败则恢复原样。
+      .opacity(this.completingId === todo.id ? 0 : 1)
+      .translate({ x: this.completingId === todo.id ? 56 : 0 })
+      .animation({ duration: 280, delay: this.completingId === todo.id ? 130 : 0, curve: Curve.EaseIn })
+      .transition(riseIn(10))
   }
 
   @Builder
@@ -562,7 +598,8 @@ struct Planner {
           }
         }.width('100%')
       }.layoutWeight(1).width('100%').scrollBar(BarState.Auto).align(Alignment.TopStart)
-    }.width('100%').height(this.todoHeight()).padding({ left: 12, right: 12, top: 4, bottom: 4 })
+    }.width('100%').height(this.todoHeight()).animation(softAnim(280))
+      .padding({ left: 12, right: 12, top: 4, bottom: 4 })
       .backgroundColor(C_SURFACE).borderRadius(10)
   }
 
@@ -586,6 +623,7 @@ struct Planner {
         Button(this.diaryBody === this.diarySaved ? '已保存' : '保存').height(36).fontSize(16)
           .backgroundColor(this.diaryBody === this.diarySaved ? C_BG : C_PRIMARY)
           .fontColor(this.diaryBody === this.diarySaved ? C_SUB : Color.White)
+          .animation(softAnim(200))
           .enabled(this.diaryBody !== this.diarySaved && !this.busy).onClick(() => { this.persistDiary(); })
       }.width('100%')
       TextArea({ text: this.diaryBody, placeholder: '' }).id('planner-record-input')
@@ -653,7 +691,7 @@ struct Planner {
         }.width('100%')
       }.layoutWeight(1).width('100%').scrollBar(BarState.Auto)
     }.width('90%').constraintSize({ maxWidth: 800 }).height('85%').padding(20)
-      .backgroundColor(C_SURFACE).borderRadius(14)
+      .backgroundColor(C_SURFACE).borderRadius(14).transition(dialogPop())
   }
 
 
@@ -662,6 +700,7 @@ struct Planner {
     Button(title).fontSize(14).height(36).layoutWeight(1)
       .backgroundColor(this.draftRepeat === value ? C_PRIMARY : C_BG)
       .fontColor(this.draftRepeat === value ? Color.White : C_INK)
+      .animation(softAnim(180))
       .onClick(() => { this.draftRepeat = value; })
   }
 
@@ -672,6 +711,9 @@ struct Planner {
       ForEach([1, 2, 3, 4, 5], (n: number) => {
         Text(n <= this.draftStars ? '★' : '☆').fontSize(30).fontColor('#A87518')
           .width(32).height(44).textAlign(TextAlign.Center).accessibilityText(`${n} 星`)
+          // 刚点中的那颗星弹一下，其余回原位
+          .scale({ x: n === this.draftStars ? 1.25 : 1, y: n === this.draftStars ? 1.25 : 1 })
+          .animation(popAnim())
           .onClick(() => { this.draftStars = n; })
       }, (n: number): string => `${n}`)
     }
@@ -688,6 +730,7 @@ struct Planner {
           Button(['一', '二', '三', '四', '五', '六', '日'][day - 1]).fontSize(14).height(40).layoutWeight(1)
             .padding(0).backgroundColor(this.draftWeekdays.indexOf(day) >= 0 ? C_PRIMARY : C_BG)
             .fontColor(this.draftWeekdays.indexOf(day) >= 0 ? Color.White : C_INK)
+            .animation(softAnim(180))
             .accessibilityText(`星期${['一', '二', '三', '四', '五', '六', '日'][day - 1]}`)
             .onClick(() => { this.toggleWeekday(day); })
         }, (day: number): string => `${day}`)
@@ -754,7 +797,7 @@ struct Planner {
         }.width('100%')
     }.id('planner-editor-panel').width('92%').constraintSize({ maxWidth: 560, maxHeight: 600 })
       .height('90%').padding(20).alignItems(HorizontalAlign.Start)
-      .backgroundColor(C_SURFACE).borderRadius(18).enabled(!this.busy)
+      .backgroundColor(C_SURFACE).borderRadius(18).enabled(!this.busy).transition(dialogPop())
   }
 
   build() {
@@ -789,12 +832,14 @@ struct Planner {
           this.historyPanel()
         }.width('100%').height('100%').backgroundColor(C_SCRIM).justifyContent(FlexAlign.Center)
           .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP, SafeAreaEdge.BOTTOM])
+          .transition(scrimFade())
       }
       if (this.editor.length > 0) {
         Column() {
           this.editorPanel()
         }.width('100%').height('100%').backgroundColor(C_SCRIM).justifyContent(FlexAlign.Center)
           .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP, SafeAreaEdge.BOTTOM])
+          .transition(scrimFade())
       }
     }.width('100%').height('100%').backgroundColor(C_BG)
       .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP, SafeAreaEdge.BOTTOM])

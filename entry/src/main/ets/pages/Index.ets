@@ -12,7 +12,7 @@ import { PlannerStore } from '../features/planner/PlannerStore';
 import { syncWindowColor } from '../common/WindowColor';
 import { common } from '@kit.AbilityKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
-import { router } from '@kit.ArkUI';
+import { router, UIContext } from '@kit.ArkUI';
 import { Schedule, ScheduleSnapshot, buildSnapshot, calcDaysLeft, startOfDay } from '../model/Schedule';
 import { ScheduleStore } from '../model/ScheduleStore';
 import { CardPusher } from '../model/CardPusher';
@@ -26,6 +26,9 @@ import {
   C_WARN_BG, C_WARN_INK, C_SCRIM, C_DISABLED, W100, W85, W65, W25,
   courseColor, urgencyColor, pad2
 } from '../common/Theme';
+import {
+  Tween, PAGE_MS, pressAnim, softAnim, enterParam, riseIn, scrimFade, dialogPop
+} from '../common/Motion';
 
 const TAG: string = 'Index';
 const DOMAIN: number = 0xFF00;
@@ -51,11 +54,43 @@ struct Index {
   @State weekNames: string[] = ['', '', '', '', '', '', ''];
   @State homeTodos: Todo[] = [];
   @State homeTodoError: string = '';
+  // ---- 动效状态（只影响展示，不参与任何数据逻辑）----
+  /** 入场分三步：顶栏 → 左栏 → 右栏，依次淡入上浮 */
+  @State inTop: boolean = false;
+  @State inLeft: boolean = false;
+  @State inRight: boolean = false;
+  /** 倒计时大数字的滚动显示值（实际值见 snapshot.daysLeft） */
+  @State shownDays: number = 0;
+  /** 「正在上课」小圆点的呼吸波纹 */
+  @State pulse: boolean = false;
+  /** 当前这节课已上的比例 0~1，仅正在上课时有意义 */
+  @State classProgress: number = 0;
+  /** 当前被手指按住的可点区域 id，用来做按下缩小 */
+  @State pressed: string = '';
+  private entered: boolean = false;
+  private daysTween: Tween = new Tween();
+  private clockId: number = -1;
+  private pulseId: number = -1;
+  private pulseResetId: number = -1;
   private plannerStore: PlannerStore | null = null;
   private store: ScheduleStore | null = null;
   private courseStore: CourseStore | null = null;
 
+  /** 页面切换：新页滑入淡入、旧页轻微左移淡出；返回时反向 */
+  pageTransition(): void {
+    PageTransitionEnter({ type: RouteType.Push, duration: PAGE_MS, curve: Curve.FastOutSlowIn })
+      .translate({ x: 72 }).opacity(0)
+    PageTransitionEnter({ type: RouteType.Pop, duration: PAGE_MS, curve: Curve.FastOutSlowIn })
+      .translate({ x: -48 }).opacity(0)
+    PageTransitionExit({ type: RouteType.Push, duration: PAGE_MS, curve: Curve.FastOutSlowIn })
+      .translate({ x: -48 }).opacity(0)
+    PageTransitionExit({ type: RouteType.Pop, duration: PAGE_MS, curve: Curve.FastOutSlowIn })
+      .translate({ x: 72 }).opacity(0)
+  }
+
   aboutToAppear(): void {
+    // 兜底：即使 onAppear 没触发，也保证内容一定会显示出来
+    setTimeout(() => { this.playEnter(); }, 150);
     // API 12+ 推荐写法；旧写法为 getContext(this) as common.UIAbilityContext
     const ctx: common.UIAbilityContext =
       this.getUIContext().getHostContext() as common.UIAbilityContext;
@@ -79,6 +114,106 @@ struct Index {
     if (this.courseStore !== null) {
       this.reloadCourses();
     }
+    this.startPulse();
+    this.startClock();
+  }
+
+  onPageHide(): void {
+    this.stopPulse();
+    this.stopClock();
+  }
+
+  aboutToDisappear(): void {
+    this.stopPulse();
+    this.stopClock();
+    this.daysTween.cancel();
+  }
+
+  // ---------------------------- 动效 ----------------------------
+
+  /** 错峰入场：顶栏 → 左栏 → 右栏。只播一次，从子页返回不重播 */
+  private playEnter(): void {
+    if (this.entered) {
+      return;
+    }
+    this.entered = true;
+    const ui: UIContext = this.getUIContext();
+    ui.animateTo(enterParam(0), () => { this.inTop = true; });
+    ui.animateTo(enterParam(90), () => { this.inLeft = true; });
+    ui.animateTo(enterParam(180), () => { this.inRight = true; });
+  }
+
+  /** 倒计时大数字：从当前显示值滚到目标值；数值没变（如从子页返回）就不动 */
+  private syncDays(): void {
+    const target: number = this.snapshot.hasData && this.snapshot.daysLeft > 0 ? this.snapshot.daysLeft : 0;
+    if (target === this.shownDays) {
+      return;
+    }
+    this.daysTween.start(this.shownDays, target, 800, (v: number): void => { this.shownDays = v; });
+  }
+
+  /** 正在上课的小圆点：波纹向外扩散并消失，循环播放；页面不可见时停掉 */
+  private startPulse(): void {
+    this.stopPulse();
+    // 用定时器逐拍驱动，而不是无限循环动画：圆点是等课程数据加载后才出现的，
+    // 无限动画只会作用于启动那一刻已存在的节点，之后新建的圆点不会动。
+    const beat: () => void = (): void => {
+      this.getUIContext().animateTo({ duration: 1500, curve: Curve.EaseOut }, () => { this.pulse = true; });
+      this.pulseResetId = setTimeout(() => {
+        // 此时波纹已完全透明，瞬间复位看不出来；复位后的圆环正好藏在实心圆点后面
+        this.getUIContext().animateTo({ duration: 0 }, () => { this.pulse = false; });
+      }, 1560);
+    };
+    beat();
+    this.pulseId = setInterval(beat, 2000);
+  }
+
+  private stopPulse(): void {
+    if (this.pulseId >= 0) {
+      clearInterval(this.pulseId);
+      this.pulseId = -1;
+    }
+    if (this.pulseResetId >= 0) {
+      clearTimeout(this.pulseResetId);
+      this.pulseResetId = -1;
+    }
+    this.getUIContext().animateTo({ duration: 0 }, () => { this.pulse = false; });
+  }
+
+  /** 每 30 秒重算一次课程概览，让「还有 N 分钟」和上课进度条跟着走 */
+  private startClock(): void {
+    if (this.clockId < 0) {
+      this.clockId = setInterval(() => {
+        if (this.courseStore !== null) {
+          this.reloadCourses();
+        }
+      }, 30000);
+    }
+  }
+
+  private stopClock(): void {
+    if (this.clockId >= 0) {
+      clearInterval(this.clockId);
+      this.clockId = -1;
+    }
+  }
+
+  /** 倒计时大数字的字号：四位数（一千天以上）才缩小，其余保持 144 */
+  private bigDaysSize(): number {
+    return this.snapshot.daysLeft >= 1000 ? 88 : 144;
+  }
+
+  private touch(id: string, e: TouchEvent): void {
+    if (e.type === TouchType.Down) {
+      this.pressed = id;
+    } else if ((e.type === TouchType.Up || e.type === TouchType.Cancel) && this.pressed === id) {
+      this.pressed = '';
+    }
+  }
+
+  private pressScale(id: string): ScaleOptions {
+    const s: number = this.pressed === id ? 0.97 : 1;
+    return { x: s, y: s };
   }
 
   private async reloadHomeTodos(): Promise<void> {
@@ -117,6 +252,8 @@ struct Index {
     const table: CourseTable = await this.courseStore!.load();
     const now: number = Date.now();
     this.next = calcNextClass(table, now);
+    this.classProgress = this.next.ongoing && this.next.endAt > this.next.startAt ?
+      Math.min(1, Math.max(0, (now - this.next.startAt) / (this.next.endAt - this.next.startAt))) : 0;
     this.today = todayClasses(table, now);
     this.week = weekOfTerm(table, now);
     // 本周每天的课程名（周一~周日），给右栏「本周概览」用
@@ -143,6 +280,7 @@ struct Index {
       active = this.schedules[0];
     }
     this.snapshot = buildSnapshot(active, Date.now());
+    this.syncDays();
   }
 
   /** 保存 + 立即推送到卡片（核心时序） */
@@ -556,6 +694,7 @@ struct Index {
         .backgroundColor(C_PRIMARY).borderRadius(30).accessibilityText('新增日程')
         .onClick(() => { this.openEditor(null); })
     }.width('100%')
+      .opacity(this.inTop ? 1 : 0).translate({ y: this.inTop ? 0 : -14 })
   }
 
   @Builder
@@ -571,10 +710,21 @@ struct Index {
         Text(this.snapshot.daysLeft > 0 ? '还剩' : (this.snapshot.daysLeft === 0 ? '就是' : ''))
           .fontSize(23).fontColor(C_SUB).margin({ top: 22 }).width('100%')
         Row({ space: 8 }) {
-          Text(this.snapshot.daysText).fontSize(this.snapshot.daysLeft > 0 ? 144 : 54)
-            .fontWeight(FontWeight.Bold).fontColor(C_PRIMARY)
-            .maxLines(1).minFontSize(38).maxFontSize(this.snapshot.daysLeft > 0 ? 144 : 54)
-            .textOverflow({ overflow: TextOverflow.Ellipsis })
+          if (this.snapshot.daysLeft > 0) {
+            // 数字滚动期间宽度会变，用一份透明的终值文字撑住宽度，免得「天」字跟着抖
+            Stack({ alignContent: Alignment.BottomStart }) {
+              Text(this.snapshot.daysText).fontSize(this.bigDaysSize()).fontWeight(FontWeight.Bold)
+                .fontColor(C_PRIMARY).maxLines(1).opacity(0).accessibilityLevel('no')
+              Text(`${this.shownDays}`).fontSize(this.bigDaysSize()).fontWeight(FontWeight.Bold)
+                .fontColor(this.snapshot.daysLeft <= 7 ? C_ACCENT : C_PRIMARY)
+                .maxLines(1).accessibilityText(this.snapshot.daysText)
+            }
+          } else {
+            Text(this.snapshot.daysText).fontSize(54)
+              .fontWeight(FontWeight.Bold).fontColor(C_PRIMARY)
+              .maxLines(1).minFontSize(38).maxFontSize(54)
+              .textOverflow({ overflow: TextOverflow.Ellipsis })
+          }
           if (this.snapshot.daysLeft > 0) {
             Text('天').fontSize(38).fontWeight(FontWeight.Medium).fontColor(C_PRIMARY).margin({ bottom: 20 })
           }
@@ -585,6 +735,8 @@ struct Index {
       }
     }.id('home-schedule').width('100%').alignItems(HorizontalAlign.Start)
       .accessibilityText('打开全部日程、待办与记录')
+      .onTouch((e: TouchEvent) => { this.touch('sched', e); })
+      .scale(this.pressScale('sched')).animation(pressAnim())
       .onClick(() => { this.getUIContext().getRouter().pushUrl({ url: 'pages/Planner' }); })
   }
 
@@ -598,7 +750,31 @@ struct Index {
   @Builder
   homeNextCourse() {
     Column() {
-      Text(this.next.ongoing ? '正在上课' : '下一节课').fontSize(22).fontColor(C_SUB).width('100%')
+      Row({ space: 12 }) {
+        if (this.next.hasClass && this.next.ongoing) {
+          // 呼吸波纹：外圈向外扩散并淡出，内圈实心
+          Stack() {
+            Column().width(12).height(12).borderRadius(6).backgroundColor(C_ACCENT)
+              .opacity(this.pulse ? 0 : 0.5)
+              .scale({ x: this.pulse ? 2.6 : 1, y: this.pulse ? 2.6 : 1 })
+            Column().width(12).height(12).borderRadius(6).backgroundColor(C_ACCENT)
+          }.width(26).height(26)
+        }
+        Text(this.next.ongoing ? '正在上课' : '下一节课').fontSize(22).fontColor(C_SUB)
+        if (this.next.hasClass && !this.next.ongoing && this.next.countdownText.length > 0) {
+          Text(this.next.countdownText).fontSize(18).fontColor(C_PRIMARY).backgroundColor(C_PRIMARY_SOFT)
+            .borderRadius(16).padding({ left: 14, right: 14, top: 4, bottom: 4 })
+            .transition(riseIn(8))
+        }
+      }.width('100%').alignItems(VerticalAlign.Center)
+      if (this.next.hasClass && this.next.ongoing) {
+        // 本节课进度：每 30 秒推进一次，宽度变化平滑过渡
+        Stack({ alignContent: Alignment.Start }) {
+          Row().width('100%').height(6).borderRadius(3).backgroundColor(C_LINE)
+          Row().width(`${Math.round(this.classProgress * 100)}%`).height(6).borderRadius(3)
+            .backgroundColor(C_ACCENT).animation(softAnim(600))
+        }.width('100%').height(6).margin({ top: 14 })
+      }
       if (this.next.hasClass) {
         Row({ space: 12 }) {
           Text(this.next.name).fontSize(42).fontWeight(FontWeight.Bold).fontColor(C_INK)
@@ -625,6 +801,8 @@ struct Index {
       }
     }.id('home-next-course').width('100%').alignItems(HorizontalAlign.Start)
       .accessibilityText('打开课程表')
+      .onTouch((e: TouchEvent) => { this.touch('course', e); })
+      .scale(this.pressScale('course')).animation(pressAnim())
       .onClick(() => { this.getUIContext().getRouter().pushUrl({ url: 'pages/CourseTable' }); })
   }
 
@@ -635,7 +813,7 @@ struct Index {
       if (this.remainingSchedules().length === 0) {
         Text('暂无其他日程').fontSize(21).fontColor(C_SUB).margin({ top: 16 }).width('100%')
       } else {
-        ForEach(this.remainingSchedules(), (item: Schedule) => {
+        ForEach(this.remainingSchedules(), (item: Schedule, idx: number) => {
           Column({ space: 6 }) {
             Row({ space: 10 }) {
               Text(item.title).fontSize(24).fontWeight(FontWeight.Medium).fontColor(C_INK)
@@ -645,8 +823,11 @@ struct Index {
             Text(`${this.dateOf(item.targetDate)} · ${this.shortDays(calcDaysLeft(item.targetDate, Date.now()))}`)
               .fontSize(20).fontColor(C_SUB).width('100%')
           }.width('100%').padding({ top: 16, bottom: 14 }).alignItems(HorizontalAlign.Start)
+            .transition(riseIn(12, 120 + idx * 60))
+            .onTouch((e: TouchEvent) => { this.touch(`os-${item.id}`, e); })
+            .scale(this.pressScale(`os-${item.id}`)).animation(pressAnim())
             .onClick(() => { this.getUIContext().getRouter().pushUrl({ url: 'pages/Planner' }); })
-          Divider().color(C_LINE)
+          Divider().color(C_LINE).transition(riseIn(12, 120 + idx * 60))
         }, (item: Schedule): string => `home-other-${item.id}`)
       }
     }.id('home-other-schedules').width('100%').alignItems(HorizontalAlign.Start)
@@ -667,7 +848,7 @@ struct Index {
       } else if (this.homeTodos.length === 0) {
         Text('暂无待办').fontSize(24).fontColor(C_SUB).margin({ top: 12 }).width('100%')
       } else {
-        ForEach(this.homeTodos, (todo: Todo) => {
+        ForEach(this.homeTodos, (todo: Todo, idx: number) => {
           Column({ space: 6 }) {
             Row({ space: 12 }) {
               Text(todo.title).fontSize(24).fontWeight(FontWeight.Medium).fontColor(C_INK)
@@ -679,8 +860,11 @@ struct Index {
               .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis }).width('100%')
           }.width('100%').padding({ top: 12, bottom: 14 }).alignItems(HorizontalAlign.Start)
             .accessibilityText(`打开待办：${todo.title}`)
+            .transition(riseIn(12, 200 + idx * 60))
+            .onTouch((e: TouchEvent) => { this.touch(`td-${todo.id}`, e); })
+            .scale(this.pressScale(`td-${todo.id}`)).animation(pressAnim())
             .onClick(() => { this.getUIContext().getRouter().pushUrl({ url: 'pages/Planner' }); })
-          Divider().color(C_LINE)
+          Divider().color(C_LINE).transition(riseIn(12, 200 + idx * 60))
         }, (todo: Todo): string => `home-todo-${todo.id}`)
       }
     }.id('home-todo-preview').width('100%').alignItems(HorizontalAlign.Start)
@@ -847,6 +1031,7 @@ struct Index {
     .padding(24)
     .borderRadius(24)
     .backgroundColor(C_SURFACE)
+    .transition(dialogPop())
   }
 
   @Builder
@@ -881,6 +1066,7 @@ struct Index {
     .padding(24)
     .borderRadius(24)
     .backgroundColor(C_SURFACE)
+    .transition(dialogPop())
   }
 
   build() {
@@ -897,11 +1083,13 @@ struct Index {
             }.width('35%').padding({ right: 34 }).alignItems(HorizontalAlign.Start)
               .border({ width: { right: 1 }, color: C_LINE })
               .constraintSize({ minHeight: 310 })
+              .opacity(this.inLeft ? 1 : 0).translate({ y: this.inLeft ? 0 : 26 })
             Column() {
               this.homeNextCourse()
               Divider().color(C_LINE).margin({ top: 28, bottom: 26 })
               this.homeTodoPreview()
             }.layoutWeight(1).alignItems(HorizontalAlign.Start)
+              .opacity(this.inRight ? 1 : 0).translate({ y: this.inRight ? 0 : 26 })
           }.width('100%').alignItems(VerticalAlign.Top)
         }.layoutWeight(1).width('100%').align(Alignment.TopStart).scrollBar(BarState.Auto)
           .margin({ top: 60 })
@@ -923,11 +1111,13 @@ struct Index {
         .height('100%')
         .justifyContent(FlexAlign.Center)
         .backgroundColor(C_SCRIM)
+        .transition(scrimFade())
       }
     }
     .width('100%')
     .height('100%')
     .backgroundColor(C_BG)
+    .onAppear(() => { this.playEnter(); })
     // 让米白背景延伸进状态栏 / 导航栏区域，消除上下白边
     .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP, SafeAreaEdge.BOTTOM])
   }

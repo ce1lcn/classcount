@@ -2,8 +2,8 @@
   "app": {
     "bundleName": "com.harmonyloom.schedule",
     "vendor": "harmonyloom",
-    "versionCode": 1001018,
-    "versionName": "1.1.18",
+    "versionCode": 1001020,
+    "versionName": "1.1.20",
     "buildVersion": "1",
     "icon": "$media:app_icon",
     "label": "$string:app_name"

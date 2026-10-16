@@ -28,7 +28,7 @@
 
 ## 附带功能
 
-- **背单词**：导入词表、按轮次刷词、掌握度统计、错词本。根目录的 `wordbook/wordbook.json` 是示例词库，仅供演示与离线测试使用
+- **背单词**：粘贴文本或选择 JSON / TXT 文件导入词表（文件最大 4 MiB）、按轮次刷词、掌握度统计、错词本。根目录的 `wordbook/wordbook.json` 是示例词库，仅供演示与离线测试使用
 
 ## 技术栈
 
@@ -56,7 +56,7 @@ entry/src/main/ets/
 ├── features/planner/       日程手账的重复规则与存储
 ├── entryformability/       卡片生命周期
 ├── entryability/           主应用入口
-├── common/                 视觉令牌与窗口配色
+├── common/                 视觉令牌、窗口配色、统一动效参数与教务地址配置
 ├── pages/                  首页 / 课表 / 导入 / 手账 / 背单词
 └── widget/pages/           桌面服务卡片（自包含）
 ```
@@ -79,9 +79,10 @@ node test/run.mjs            # 日程天数与进度算法                34 项
 node test/planner.mjs        # 重复规则与顺延场景                20 组
 node test/planner-store.mjs  # 存储层故障注入                     7 组
 node test/wordbook.mjs       # 词表解析与轮次统计                24 项
+node test/ui-regression.mjs  # 页面保存与文件读取故障回归         7 组
 ```
 
-合计 125 项，全部通过。
+合计 132 项，全部通过。页面方法回归使用平台模拟，不替代 ArkTS 构建与真机界面验证。
 
 ## 适配其他学校
 

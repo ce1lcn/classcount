@@ -14,9 +14,12 @@ import {
 } from '../model/Course';
 import { CourseStore } from '../model/CourseStore';
 import {
-  C_BG, C_SURFACE, C_INK, C_SUB, C_MUTE, C_LINE, C_PRIMARY, C_PRIMARY_SOFT,
+  C_BG, C_SURFACE, C_INK, C_SUB, C_MUTE, C_LINE, C_PRIMARY, C_PRIMARY_SOFT, C_ACCENT,
   C_WARN_BG, C_WARN_INK, C_SCRIM, W100, courseColor, courseTint
 } from '../common/Theme';
+import {
+  PAGE_MS, pressAnim, softAnim, riseIn, slideIn, fadeIn, scrimFade, sheetUp
+} from '../common/Motion';
 
 const TAG: string = 'CourseTable';
 const DOMAIN: number = 0xFF00;
@@ -57,14 +60,170 @@ struct CourseTablePage {
    * 于是 ArkUI 会复用旧组件、onClick 闭包仍指向旧的 item —— 表现为「备注保存后不生效，退出重进才好」。
    */
   @State dataVersion: number = 0;
+  // ---- 动效状态（只影响展示）----
+  /** 最近一次换周的方向：1 往后翻、-1 往前翻，决定新课程块从哪边滑入 */
+  @State weekDir: number = 1;
+  /** 「正在上课」圆点和当前时间线端点的呼吸 */
+  @State pulse: boolean = false;
+  /** 当前时间线在一天网格里的纵向位置（-1 表示不显示） */
+  @State nowY: number = -1;
+  /** 被手指按住的课程块 id */
+  @State pressed: string = '';
   private store: CourseStore | null = null;
   private selItem: CourseItem | null = null;
+  /** 课程块是否带「依次滑入」动画：首次加载、换周、改开学日时开，保存备注（整体重建）时关，避免闪一下 */
+  private cascade: boolean = true;
+  private cascadeTimer: number = -1;
+  private clockId: number = -1;
+  private pulseId: number = -1;
+  private pulseResetId: number = -1;
+
+  /** 页面切换：新页滑入淡入、旧页轻微左移淡出；返回时反向 */
+  pageTransition(): void {
+    PageTransitionEnter({ type: RouteType.Push, duration: PAGE_MS, curve: Curve.FastOutSlowIn })
+      .translate({ x: 72 }).opacity(0)
+    PageTransitionEnter({ type: RouteType.Pop, duration: PAGE_MS, curve: Curve.FastOutSlowIn })
+      .translate({ x: -48 }).opacity(0)
+    PageTransitionExit({ type: RouteType.Push, duration: PAGE_MS, curve: Curve.FastOutSlowIn })
+      .translate({ x: -48 }).opacity(0)
+    PageTransitionExit({ type: RouteType.Pop, duration: PAGE_MS, curve: Curve.FastOutSlowIn })
+      .translate({ x: 72 }).opacity(0)
+  }
 
   aboutToAppear(): void {
     const ctx: common.UIAbilityContext =
       this.getUIContext().getHostContext() as common.UIAbilityContext;
     this.store = new CourseStore(ctx);
+    this.armCascade();
     this.reload();
+  }
+
+  onPageShow(): void {
+    this.tick();
+    this.startPulse();
+    if (this.clockId < 0) {
+      this.clockId = setInterval(() => { this.tick(); }, 60000);
+    }
+  }
+
+  /** 每分钟：推进当前时间线，并刷新顶部「下一节」横幅 */
+  private tick(): void {
+    this.nowY = this.nowOffset();
+    if (this.loaded) {
+      this.next = calcNextClass(this.table, Date.now());
+    }
+  }
+
+  onPageHide(): void {
+    this.stopPulse();
+    this.stopClock();
+  }
+
+  aboutToDisappear(): void {
+    this.stopPulse();
+    this.stopClock();
+    if (this.cascadeTimer >= 0) {
+      clearTimeout(this.cascadeTimer);
+      this.cascadeTimer = -1;
+    }
+  }
+
+  private stopClock(): void {
+    if (this.clockId >= 0) {
+      clearInterval(this.clockId);
+      this.clockId = -1;
+    }
+  }
+
+  /** 逐拍驱动的呼吸波纹（原因同首页：无限循环动画不会作用于之后才创建的节点） */
+  private startPulse(): void {
+    this.stopPulse();
+    const beat: () => void = (): void => {
+      this.getUIContext().animateTo({ duration: 1500, curve: Curve.EaseOut }, () => { this.pulse = true; });
+      this.pulseResetId = setTimeout(() => {
+        this.getUIContext().animateTo({ duration: 0 }, () => { this.pulse = false; });
+      }, 1560);
+    };
+    beat();
+    this.pulseId = setInterval(beat, 2000);
+  }
+
+  private stopPulse(): void {
+    if (this.pulseId >= 0) {
+      clearInterval(this.pulseId);
+      this.pulseId = -1;
+    }
+    if (this.pulseResetId >= 0) {
+      clearTimeout(this.pulseResetId);
+      this.pulseResetId = -1;
+    }
+    this.getUIContext().animateTo({ duration: 0 }, () => { this.pulse = false; });
+  }
+
+  /** 打开一小段「课程块滑入」窗口：在这期间新建的块带入场动画 */
+  private armCascade(): void {
+    this.cascade = true;
+    if (this.cascadeTimer >= 0) {
+      clearTimeout(this.cascadeTimer);
+    }
+    this.cascadeTimer = setTimeout(() => {
+      this.cascade = false;
+      this.cascadeTimer = -1;
+    }, 900);
+  }
+
+  /** 换周（带方向）：统一入口，按钮、回本周、周数选择都走这里 */
+  private goWeek(target: number): void {
+    if (target === this.week) {
+      return;
+    }
+    this.weekDir = target > this.week ? 1 : -1;
+    this.armCascade();
+    this.week = target;
+  }
+
+  private touch(id: string, e: TouchEvent): void {
+    if (e.type === TouchType.Down) {
+      this.pressed = id;
+    } else if ((e.type === TouchType.Up || e.type === TouchType.Cancel) && this.pressed === id) {
+      this.pressed = '';
+    }
+  }
+
+  /** 按下略缩小，选中略放大（3%），其余原样 */
+  private blockScale(id: string): ScaleOptions {
+    const s: number = this.pressed === id ? 0.95 : (this.selId === id ? 1.03 : 1);
+    return { x: s, y: s };
+  }
+
+  /** 课程块入场：从换周方向滑入，按星期列错开，形成由左到右的依次出现 */
+  private blockEnter(day: number): TransitionEffect {
+    return this.cascade ? slideIn(this.weekDir * 26, (day - 1) * 35) : TransitionEffect.IDENTITY;
+  }
+
+  private currentWeek(): number {
+    return weekOfTerm(this.table, Date.now());
+  }
+
+  /**
+   * 此刻在一天网格里的纵向位置：落在某节课内按进度线性插值，落在课间/午休停在两节交界，
+   * 早于第 1 节或晚于第 12 节返回 -1（不显示）。
+   */
+  private nowOffset(): number {
+    const d: Date = new Date();
+    const m: number = d.getHours() * 60 + d.getMinutes() + d.getSeconds() / 60;
+    for (let i = 0; i < SECTIONS.length; i++) {
+      const sec: number = SECTIONS[i];
+      const s: number = sectionStartTime(sec);
+      const e: number = sectionEndTime(sec);
+      if (m < s) {
+        return sec === 1 ? -1 : (sec - 1) * ROW_H;
+      }
+      if (m <= e) {
+        return (sec - 1 + (m - s) / (e - s)) * ROW_H;
+      }
+    }
+    return -1;
   }
 
   private async reload(): Promise<void> {
@@ -248,6 +407,7 @@ struct CourseTablePage {
     const store: CourseStore = this.store!;
     await store.setTermStart(startOfWeek(this.termDate.getTime()));
     this.showTermPicker = false;
+    this.armCascade();
     await this.reload();
   }
 
@@ -289,14 +449,19 @@ struct CourseTablePage {
         .margin({ left: 8 })
         .onClick(() => {
           if (this.week > 1) {
-            this.week = this.week - 1;
+            this.goWeek(this.week - 1);
           }
         })
-      Text(`第 ${this.week} 周`)
-        .fontSize(20)
-        .fontWeight(FontWeight.Bold)
-        .fontColor(C_INK)
-        .margin({ left: 12, right: 12 })
+      // 周数用单元素 ForEach 按周号做 key：换周时数字重新「浮」出来；固定宽度避免两侧按钮抖动
+      Row() {
+        ForEach([this.week], (w: number) => {
+          Text(`第 ${w} 周`)
+            .fontSize(20)
+            .fontWeight(FontWeight.Bold)
+            .fontColor(C_INK)
+            .transition(riseIn(this.weekDir > 0 ? 12 : -12))
+        }, (w: number): string => `wk-${w}`)
+      }.width(92).justifyContent(FlexAlign.Center).margin({ left: 4, right: 4 })
       Button() {
         SymbolGlyph($r('sys.symbol.chevron_right'))
           .fontSize(18)
@@ -311,7 +476,7 @@ struct CourseTablePage {
         .backgroundColor(C_PRIMARY_SOFT)
         .onClick(() => {
           if (this.week < MAX_WEEK) {
-            this.week = this.week + 1;
+            this.goWeek(this.week + 1);
           }
         })
       Text('回到本周')
@@ -321,8 +486,11 @@ struct CourseTablePage {
         .borderRadius(16)
         .backgroundColor(C_PRIMARY_SOFT)
         .margin({ left: 12 })
+        // 已经在本周时变淡，提示「无需再回」；仍可点，行为不变
+        .opacity(this.week === this.currentWeek() ? 0.4 : 1)
+        .animation(softAnim(220))
         .onClick(() => {
-          this.week = weekOfTerm(this.table, Date.now());
+          this.goWeek(this.currentWeek());
         })
 
       Blank()
@@ -357,6 +525,14 @@ struct CourseTablePage {
   @Builder
   nextBanner() {
     Row() {
+      if (this.next.hasClass && this.next.ongoing) {
+        Stack() {
+          Column().width(8).height(8).borderRadius(4).backgroundColor(C_ACCENT)
+            .opacity(this.pulse ? 0 : 0.5)
+            .scale({ x: this.pulse ? 2.6 : 1, y: this.pulse ? 2.6 : 1 })
+          Column().width(8).height(8).borderRadius(4).backgroundColor(C_ACCENT)
+        }.width(20).height(20)
+      }
       Text(this.next.ongoing ? '正在上课' : '下一节')
         .fontSize(12)
         .fontColor(C_PRIMARY)
@@ -483,6 +659,9 @@ struct CourseTablePage {
             width: p.item.id === this.selId ? 2 : 0,
             color: courseColor(p.item.name)
           })
+          .onTouch((e: TouchEvent) => { this.touch(p.item.id, e); })
+          .scale(this.blockScale(p.item.id))
+          .animation(pressAnim())
           .onClick(() => {
             this.openDetail(p.item);
           })
@@ -494,7 +673,27 @@ struct CourseTablePage {
           x: `${p.lane * 100 / p.lanes}%`,
           y: (p.item.startSection - 1) * ROW_H
         })
+        .transition(this.blockEnter(d))
       }, (p: Placed): string => `b${this.dataVersion}-${this.week}-${p.item.id}`)
+
+      // 当前时间线：只出现在「今天」那一列；端点有呼吸波纹，点击穿透到下面的课程块
+      if (this.isToday(d) && this.nowY >= 0) {
+        Row() {
+          Stack() {
+            Column().width(9).height(9).borderRadius(5).backgroundColor(C_ACCENT)
+              .opacity(this.pulse ? 0 : 0.5)
+              .scale({ x: this.pulse ? 2.6 : 1, y: this.pulse ? 2.6 : 1 })
+            Column().width(9).height(9).borderRadius(5).backgroundColor(C_ACCENT)
+          }.width(14).height(14)
+          Column().layoutWeight(1).height(1.5).backgroundColor(C_ACCENT)
+        }
+        .width('100%')
+        .height(14)
+        .alignItems(VerticalAlign.Center)
+        .position({ x: -5, y: this.nowY - 7 })
+        .hitTestBehavior(HitTestMode.None)
+        .transition(fadeIn(300))
+      }
     }
     .layoutWeight(1)
     .height(ROW_H * SECTIONS.length)
@@ -569,6 +768,7 @@ struct CourseTablePage {
     .padding(20)
     .backgroundColor(C_SURFACE)
     .borderRadius(24)
+    .transition(slideIn(28))
   }
 
   /** 右侧常驻详情栏的空态 */
@@ -589,6 +789,7 @@ struct CourseTablePage {
     .borderRadius(24)
     .justifyContent(FlexAlign.Center)
     .height(220)
+    .transition(fadeIn())
   }
 
   @Builder
@@ -623,6 +824,7 @@ struct CourseTablePage {
     }
     .width('100%').padding(20).backgroundColor(C_SURFACE)
     .borderRadius({ topLeft: 24, topRight: 24 })
+    .transition(sheetUp())
     .onClick(() => {
       // 吞掉点击，避免冒泡到遮罩把面板关掉
     })
@@ -672,6 +874,7 @@ struct CourseTablePage {
           .width('100%')
           .align(Alignment.Top)
           .scrollBar(BarState.Off)
+          .transition(fadeIn())
         }
       }
       .layoutWeight(1)
@@ -680,11 +883,14 @@ struct CourseTablePage {
       // 横屏常驻详情栏：点课程块在右边显示，不再弹层
       Scroll() {
         Column() {
-          if (this.selId.length > 0) {
-            this.detailPanel()
-          } else {
-            this.detailEmpty()
-          }
+          // 按所选课程做 key：换一门课时详情卡重新滑入；取消选中回到空态时淡入
+          ForEach(this.selId.length > 0 ? [this.selId] : [''], (k: string) => {
+            if (k.length > 0) {
+              this.detailPanel()
+            } else {
+              this.detailEmpty()
+            }
+          }, (k: string): string => `dp-${k}`)
         }
         .width('100%')
       }
@@ -705,6 +911,7 @@ struct CourseTablePage {
         .width('100%')
         .height('100%')
         .backgroundColor(C_SCRIM)
+        .transition(scrimFade())
         .onClick(() => {
           this.showTermPicker = false;
         })

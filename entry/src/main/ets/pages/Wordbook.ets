@@ -12,6 +12,8 @@
  */
 import { KeyboardAvoidMode as UIKeyboardAvoidMode } from '@ohos.arkui.UIContext';
 import { common } from '@kit.AbilityKit';
+import { fileIo, picker } from '@kit.CoreFileKit';
+import { util } from '@kit.ArkTS';
 import { syncWindowColor } from '../common/WindowColor';
 import {
   C_BG, C_SURFACE, C_INK, C_SUB, C_MUTE, C_LINE, C_PRIMARY, C_PRIMARY_SOFT, C_ACCENT,
@@ -26,6 +28,9 @@ import {
   sessionCounts, filledCount, hasSession, findList, listProgress, wrongBook, indexRecords, recordKey
 } from '../model/Wordbook';
 import { WordbookStore, WordbookData } from '../model/WordbookStore';
+import {
+  Tween, PAGE_MS, softAnim, popAnim, slideIn, fadeIn, scrimFade, dialogPop
+} from '../common/Motion';
 
 const TINT_RIGHT: string = '#1F2F6F5E';
 const TINT_WRONG: string = '#1FC8402F';
@@ -54,7 +59,15 @@ struct Wordbook {
   @State view: string = 'home';
   @State lists: WordList[] = [];
   @State records: WordbookRecords = new WordbookRecords();
-  @State session: WordSession = new WordSession();
+  @State @Watch('onSessionChange') session: WordSession = new WordSession();
+  // ---- 动效状态（只影响展示）----
+  /** 结算页「N 对 / N 错」的滚动显示值；-1 表示不滚动，直接显示真实值 */
+  @State shownRight: number = -1;
+  @State shownWrong: number = -1;
+  /** 「全部答对」大字是否已弹出 */
+  @State popOn: boolean = true;
+  /** 词表进度条：加载完成后才从 0 涨到实际值 */
+  @State barsOn: boolean = false;
   @State selected: string = '';
   @State wrongFilter: string = '';
   @State filled: number = 0;
@@ -62,6 +75,9 @@ struct Wordbook {
   @State @Watch('refreshWindowColor') showImport: boolean = false;
   @State importError: string = '';
   @State importHasText: boolean = false;
+  /** 仅用于把「选中的文件内容」灌进输入框；用户手打时不动它，避免打断输入法组词 */
+  @State importSeed: string = '';
+  @State importNote: string = '';
   @State @Watch('refreshWindowColor') confirm: string = '';
   @State confirmTarget: string = '';
   private store: WordbookStore | null = null;
@@ -71,9 +87,70 @@ struct Wordbook {
   private dirty: boolean = false;
   private scroller: Scroller = new Scroller();
   private previousKeyboardMode: UIKeyboardAvoidMode = UIKeyboardAvoidMode.OFFSET;
+  private rightTween: Tween = new Tween();
+  private wrongTween: Tween = new Tween();
+  private lastPhase: string = '';
+  /** 点词表卡片换详情时才让详情滑入；数据刷新造成的重建不播，避免闪动 */
+  private animDetail: boolean = false;
+  private animDetailTimer: number = -1;
 
   private refreshWindowColor(): void {
     syncWindowColor(this.getUIContext(), this.showImport || this.confirm.length > 0);
+  }
+
+  /** 页面切换：新页滑入淡入、旧页轻微左移淡出；返回时反向 */
+  pageTransition(): void {
+    PageTransitionEnter({ type: RouteType.Push, duration: PAGE_MS, curve: Curve.FastOutSlowIn })
+      .translate({ x: 72 }).opacity(0)
+    PageTransitionEnter({ type: RouteType.Pop, duration: PAGE_MS, curve: Curve.FastOutSlowIn })
+      .translate({ x: -48 }).opacity(0)
+    PageTransitionExit({ type: RouteType.Push, duration: PAGE_MS, curve: Curve.FastOutSlowIn })
+      .translate({ x: -48 }).opacity(0)
+    PageTransitionExit({ type: RouteType.Pop, duration: PAGE_MS, curve: Curve.FastOutSlowIn })
+      .translate({ x: 72 }).opacity(0)
+  }
+
+  /**
+   * 会话对象每次被替换都会走到这里：刚进入「结算」阶段时，让对/错数字从 0 滚上来，
+   * 全部答对时大字弹出；离开结算阶段则复位。只改展示状态，不动会话数据。
+   */
+  private onSessionChange(): void {
+    const phase: string = this.session.phase;
+    if (phase === this.lastPhase) {
+      return;
+    }
+    this.lastPhase = phase;
+    if (phase !== PHASE_RESULT) {
+      this.rightTween.cancel();
+      this.wrongTween.cancel();
+      this.shownRight = -1;
+      this.shownWrong = -1;
+      this.popOn = true;
+      return;
+    }
+    const counts: SessionCounts = sessionCounts(this.session);
+    this.shownRight = 0;
+    this.shownWrong = 0;
+    this.rightTween.start(0, counts.right, 700, (v: number): void => { this.shownRight = v; });
+    this.wrongTween.start(0, counts.wrong, 700, (v: number): void => { this.shownWrong = v; });
+    if (this.session.finished) {
+      this.popOn = false;
+      setTimeout(() => {
+        this.getUIContext().animateTo({ duration: 600, curve: Curve.EaseOut }, () => { this.popOn = true; });
+      }, 60);
+    }
+  }
+
+  private pickList(name: string): void {
+    this.animDetail = true;
+    if (this.animDetailTimer >= 0) {
+      clearTimeout(this.animDetailTimer);
+    }
+    this.animDetailTimer = setTimeout(() => {
+      this.animDetail = false;
+      this.animDetailTimer = -1;
+    }, 600);
+    this.selected = name;
   }
 
   aboutToAppear(): void {
@@ -97,6 +174,12 @@ struct Wordbook {
 
   aboutToDisappear(): void {
     this.flushNow();
+    this.rightTween.cancel();
+    this.wrongTween.cancel();
+    if (this.animDetailTimer >= 0) {
+      clearTimeout(this.animDetailTimer);
+      this.animDetailTimer = -1;
+    }
     this.getUIContext().setKeyboardAvoidMode(this.previousKeyboardMode);
   }
 
@@ -142,6 +225,11 @@ struct Wordbook {
       this.filled = filledCount(session);
       this.selected = hasSession(session) ? session.listName : (data.lists.length > 0 ? data.lists[0].name : '');
       this.ready = true;
+      // 词表卡片的进度条：先以 0 宽度出现，稍后涨到实际进度
+      setTimeout(() => {
+        this.getUIContext().animateTo({ duration: 800, delay: 120, curve: Curve.FastOutSlowIn },
+          () => { this.barsOn = true; });
+      }, 60);
     } catch (err) {
       this.error = `${(err as Error).message}。可重试，原数据不会被改动。`;
     } finally {
@@ -309,9 +397,84 @@ struct Wordbook {
 
   private openImport(): void {
     this.importText = '';
+    this.importSeed = '';
     this.importError = '';
+    this.importNote = '';
     this.importHasText = false;
     this.showImport = true;
+  }
+
+  /** 从系统文件选择器挑一个词表文件，读出文本填进输入框（不直接导入，用户确认后再点「导入」）。 */
+  private async pickImportFile(): Promise<void> {
+    if (this.busy) {
+      return;
+    }
+    try {
+      const context: common.UIAbilityContext = this.getUIContext().getHostContext() as common.UIAbilityContext;
+      const documentPicker: picker.DocumentViewPicker = new picker.DocumentViewPicker(context);
+      const options: picker.DocumentSelectOptions = new picker.DocumentSelectOptions();
+      options.maxSelectNumber = 1;
+      options.fileSuffixFilters = ['.json', '.txt'];
+      const uris: string[] = await documentPicker.select(options);
+      if (uris === undefined || uris === null || uris.length === 0) {
+        return;
+      }
+      const uri: string = uris[0];
+      const text: string = await this.readFileText(uri);
+      this.importText = text;
+      this.importSeed = text;
+      this.importHasText = text.trim().length > 0;
+      this.importError = '';
+      const name: string = this.baseName(uri);
+      const parsed: ImportParse = parseWordbookText(text);
+      if (parsed.error.length > 0) {
+        this.importNote = `已读取 ${name}，但这份内容还不能导入：${parsed.error}`;
+      } else {
+        this.importNote = `已读取 ${name}：${parsed.lists.length} 个词表、共 ${parsed.wordCount} 词`;
+      }
+    } catch (err) {
+      this.importError = `读取文件失败：${(err as Error).message}`;
+    }
+  }
+
+  private async readFileText(uri: string): Promise<string> {
+    const maxBytes: number = 4 * 1024 * 1024;
+    const file: fileIo.File = await fileIo.open(uri, fileIo.OpenMode.READ_ONLY);
+    try {
+      const size: number = (await fileIo.stat(file.fd)).size;
+      if (!Number.isSafeInteger(size) || size < 0 || size > maxBytes) {
+        throw new Error('词表文件不能超过 4 MiB，请拆分后再导入');
+      }
+      const bytes: Uint8Array = new Uint8Array(size);
+      let offset: number = 0;
+      while (offset < size) {
+        const chunk: ArrayBuffer = new ArrayBuffer(Math.min(65536, size - offset));
+        const read: number = await fileIo.read(file.fd, chunk);
+        if (read <= 0) {
+          throw new Error('文件未读取完整，请重新选择文件');
+        }
+        bytes.set(new Uint8Array(chunk, 0, read), offset);
+        offset += read;
+      }
+      const decoder: util.TextDecoder = util.TextDecoder.create('utf-8');
+      let text: string = decoder.decodeToString(bytes);
+      if (text.length > 0 && text.charCodeAt(0) === 0xFEFF) {
+        text = text.substring(1);
+      }
+      return text;
+    } finally {
+      await fileIo.close(file);
+    }
+  }
+
+  private baseName(uri: string): string {
+    const cut: number = uri.lastIndexOf('/');
+    const name: string = cut >= 0 ? uri.substring(cut + 1) : uri;
+    try {
+      return decodeURIComponent(name);
+    } catch (err) {
+      return name;
+    }
   }
 
   private async doImport(): Promise<void> {
@@ -570,7 +733,7 @@ struct Wordbook {
   progressBar(done: number, total: number, color: string) {
     Stack({ alignContent: Alignment.Start }) {
       Row().width('100%').height(8).borderRadius(4).backgroundColor(C_LINE)
-      Row().width(total > 0 ? `${Math.round(done * 100 / total)}%` : '0%').height(8).borderRadius(4)
+      Row().width(this.barsOn && total > 0 ? `${Math.round(done * 100 / total)}%` : '0%').height(8).borderRadius(4)
         .backgroundColor(color)
     }.width('100%').height(8)
   }
@@ -623,7 +786,7 @@ struct Wordbook {
     }.width('100%').padding(20).borderRadius(20).alignItems(HorizontalAlign.Start)
       .backgroundColor(this.selected === list.name ? C_PRIMARY_SOFT : C_SURFACE)
       .accessibilityText(`词表 ${list.name}，共 ${list.words.length} 词`)
-      .onClick(() => { this.selected = list.name; })
+      .onClick(() => { this.pickList(list.name); })
   }
 
   private progressOf(list: WordList): ListProgress {
@@ -709,6 +872,7 @@ struct Wordbook {
           }, (item: PreviewItem): string => `${list.name}|${item.word.en}|${item.wrong}`)
         }.layoutWeight(1).width('100%').scrollBar(BarState.Auto).divider({ strokeWidth: 1, color: C_LINE })
     }.width('100%').height('100%').alignItems(HorizontalAlign.Start)
+      .transition(this.animDetail ? slideIn(28) : TransitionEffect.IDENTITY)
   }
 
   @Builder
@@ -838,7 +1002,7 @@ struct Wordbook {
       Stack({ alignContent: Alignment.Start }) {
         Row().width('100%').height(8).borderRadius(4).backgroundColor(C_LINE)
         Row().width(this.session.total > 0 ? `${Math.round(this.passedCount() * 100 / this.session.total)}%` : '0%')
-          .height(8).borderRadius(4).backgroundColor(C_PRIMARY)
+          .height(8).borderRadius(4).backgroundColor(C_PRIMARY).animation(softAnim(500))
       }.width('100%').height(8)
     }.width('100%').margin({ top: 16, bottom: 14 })
   }
@@ -880,7 +1044,7 @@ struct Wordbook {
           .padding({ left: 48, right: 48 }).fontColor(W100).backgroundColor(this.busy ? C_DISABLED : C_PRIMARY)
           .borderRadius(30).enabled(!this.busy).onClick(() => { this.reveal(); })
       }.width('100%').padding({ left: 8, right: 4, top: 14 })
-    }.width('100%').layoutWeight(1)
+    }.width('100%').layoutWeight(1).transition(fadeIn())
   }
 
   @Builder
@@ -939,9 +1103,10 @@ struct Wordbook {
         Button('结算本轮').id('wb-settle').fontSize(19).fontWeight(FontWeight.Medium).height(50)
           .padding({ left: 44, right: 44 }).fontColor(W100)
           .backgroundColor(this.checkReady() && !this.busy ? C_PRIMARY : C_DISABLED).borderRadius(30)
+          .animation(softAnim(220))
           .enabled(this.checkReady() && !this.busy).onClick(() => { this.settle(); })
       }.width('100%').padding({ left: 8, right: 4, top: 14 })
-    }.width('100%').layoutWeight(1)
+    }.width('100%').layoutWeight(1).transition(fadeIn())
   }
 
   private checkReady(): boolean {
@@ -969,14 +1134,20 @@ struct Wordbook {
       Column({ space: 18 }) {
         if (this.session.finished) {
           Text('本遍完成').fontSize(22).fontColor(C_PRIMARY).fontWeight(FontWeight.Medium)
+          // 大字弹出：从 70% 弹性放大并淡入
           Text('全部答对').fontSize(67).fontWeight(FontWeight.Bold).fontColor(C_PRIMARY)
+            .opacity(this.popOn ? 1 : 0)
+            .scale({ x: this.popOn ? 1 : 0.7, y: this.popOn ? 1 : 0.7 })
+            .animation(popAnim())
           Text(`「${this.session.listName}」这一遍共 ${this.session.rounds.length} 轮刷完 · 累计已刷 ${this.passesOfSession()} 遍`)
             .fontSize(17).fontColor(C_SUB)
         } else {
           Text(`第 ${this.session.round} 轮结算`).fontSize(21).fontColor(C_SUB)
           Row({ space: 28 }) {
-            Text(`${sessionCounts(this.session).right} 对`).fontSize(67).fontWeight(FontWeight.Bold).fontColor(C_PRIMARY)
-            Text(`${sessionCounts(this.session).wrong} 错`).fontSize(67).fontWeight(FontWeight.Bold).fontColor(C_DANGER)
+            Text(`${this.shownRight >= 0 ? this.shownRight : sessionCounts(this.session).right} 对`)
+              .fontSize(67).fontWeight(FontWeight.Bold).fontColor(C_PRIMARY)
+            Text(`${this.shownWrong >= 0 ? this.shownWrong : sessionCounts(this.session).wrong} 错`)
+              .fontSize(67).fontWeight(FontWeight.Bold).fontColor(C_DANGER)
           }
         }
         Flex({ wrap: FlexWrap.Wrap, justifyContent: FlexAlign.Center }) {
@@ -1014,7 +1185,7 @@ struct Wordbook {
           }
         }.margin({ top: 14 })
       }.width('100%').padding({ top: 24, bottom: 30 }).alignItems(HorizontalAlign.Center)
-    }.layoutWeight(1).width('100%').scrollBar(BarState.Auto)
+    }.layoutWeight(1).width('100%').scrollBar(BarState.Auto).transition(fadeIn())
   }
 
   private wrongEntries(): SessionEntry[] {
@@ -1056,8 +1227,19 @@ struct Wordbook {
       Text('导入词表').fontSize(21).fontWeight(FontWeight.Bold).fontColor(C_INK).width('100%')
       Text('粘贴词表 JSON 文本。同名词表会被更新（答题记录保留），新名字则新增。')
         .fontSize(14).fontColor(C_SUB).width('100%').margin({ top: 8 })
+      Row({ space: 12 }) {
+        Button('选择文件…')
+          .id('wb-import-file')
+          .height(42).fontSize(16).padding({ left: 24, right: 24 })
+          .fontColor(C_PRIMARY).backgroundColor(C_PRIMARY_SOFT).borderRadius(21)
+          .onClick(() => { this.pickImportFile(); })
+        Text(this.importNote.length > 0 ? this.importNote
+          : '也可以直接选 .json / .txt 词表文件，内容会自动填进下面的框')
+          .fontSize(13).fontColor(C_SUB).layoutWeight(1).maxLines(2)
+      }
+      .width('100%').margin({ top: 12 })
       TextArea({ placeholder: '{ "lists": [ { "name": "词表名", "words": [ { "en": "word", "ph": "[wɜːd]", "cn": "n. 单词" } ] } ] }',
-        text: this.importText })
+        text: this.importSeed })
         .id('wb-import-text')
         .height(360).fontSize(14).fontColor(C_INK).backgroundColor(C_BG).borderRadius(14)
         .margin({ top: 14 })
@@ -1082,7 +1264,7 @@ struct Wordbook {
           .backgroundColor(this.importHasText && !this.busy ? C_PRIMARY : C_DISABLED).borderRadius(27)
           .enabled(this.importHasText && !this.busy).onClick(() => { this.doImport(); })
       }.width('100%').margin({ top: 16 })
-    }.width(860).padding(28).borderRadius(26).backgroundColor(C_SURFACE)
+    }.width(860).padding(28).borderRadius(26).backgroundColor(C_SURFACE).transition(dialogPop())
   }
 
   @Builder
@@ -1097,7 +1279,7 @@ struct Wordbook {
           .fontSize(17).height(44).layoutWeight(1).fontColor(W100).backgroundColor(C_DANGER).borderRadius(26)
           .onClick(() => { this.confirmAction(); })
       }.width('100%').margin({ top: 22 })
-    }.width(480).padding(28).borderRadius(26).backgroundColor(C_SURFACE)
+    }.width(480).padding(28).borderRadius(26).backgroundColor(C_SURFACE).transition(dialogPop())
   }
 
   build() {
@@ -1110,11 +1292,12 @@ struct Wordbook {
             Text(this.error.length > 0 ? '' : '正在读取词表…').fontSize(16).fontColor(C_SUB)
           }.width('100%').layoutWeight(1).justifyContent(FlexAlign.Center)
         } else if (this.view === 'home') {
-          this.homeView()
+          // 三个视图各包一层：切换时新视图从右侧滑入（仅出现，旧视图瞬间消失，不挤布局）
+          Column() { this.homeView() }.width('100%').layoutWeight(1).transition(slideIn(36))
         } else if (this.view === 'wrong') {
-          this.wrongView()
+          Column() { this.wrongView() }.width('100%').layoutWeight(1).transition(slideIn(36))
         } else {
-          this.sessionView()
+          Column() { this.sessionView() }.width('100%').layoutWeight(1).transition(slideIn(36))
         }
       }.width('100%').height('100%').padding({ top: 24, left: 44, right: 36, bottom: 24 })
 
@@ -1126,6 +1309,7 @@ struct Wordbook {
             this.importDialog()
           }
         }.width('100%').height('100%').justifyContent(FlexAlign.Center).backgroundColor(C_SCRIM)
+          .transition(scrimFade())
       }
     }.width('100%').height('100%').backgroundColor(C_BG)
       // 让米白背景延伸进状态栏 / 导航栏区域，消除上下白边
